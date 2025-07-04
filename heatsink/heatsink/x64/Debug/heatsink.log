@@ -1,0 +1,4 @@
+﻿  Building 'heatsink' with toolset 'WindowsKernelModeDriver10.0' and the 'Desktop' target platform.
+  Stamping x64\Debug\heatsink.inf
+  Stamping [Version] section with DriverVer=07/03/2025,23.9.45.493
+V:\My_Stuff\prog\Micro-cuckDrivers\heatsink\heatsink\heatsink\heatsink.inf : error 1297: Device driver does not install on any devices, use primitive driver if this is intended.
