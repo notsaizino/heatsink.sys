@@ -1,15 +1,13 @@
-;
-; heatsink.inf
-;
+; heatsink.inf - INF for primitive (software-only) kernel driver
 
 [Version]
-Signature="$WINDOWS NT$"
-Class=System
-ClassGuid={4d36e97d-e325-11ce-bfc1-08002be10318}
-Provider=%ManufacturerName%
-DriverVer = 07/03/2025,23.9.45.493
-CatalogFile=heatsink.cat
-PnpLockdown=1
+Signature   = "$WINDOWS NT$"
+Class       = System
+ClassGuid   = {4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider    = %ManufacturerName%
+DriverVer = 08/11/2025,20.26.31.759
+CatalogFile = heatsink.cat
+PnpLockdown = 1
 
 [DestinationDirs]
 DefaultDestDir = 13
@@ -18,12 +16,22 @@ DefaultDestDir = 13
 1 = %DiskName%,,,""
 
 [SourceDisksFiles]
+heatsink.sys = 1
 
-[Manufacturer]
-%ManufacturerName%=Standard,NTamd64.10.0...16299 ; %13% support introduced in build 16299
+[DefaultInstall.NTamd64]
+CopyFiles = @heatsink.sys
 
-[Standard.NTamd64.10.0...16299]
+[DefaultInstall.NTamd64.Services]
+AddService = heatsink,,heatsink_Service_Install
+
+[heatsink_Service_Install]
+DisplayName    = "Heatsink Kernel Driver"
+ServiceType    = 1          ; SERVICE_KERNEL_DRIVER
+StartType      = 3          ; SERVICE_DEMAND_START (manual)
+ErrorControl   = 1          ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %13%\heatsink.sys
 
 [Strings]
-ManufacturerName="<Your manufacturer name>" ;TODO: Replace with your manufacturer name
-DiskName="heatsink Source Disk"
+ManufacturerName = "Your Manufacturer Name"
+DiskName = "Heatsink Driver Installation Disk"
+

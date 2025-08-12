@@ -1,4 +1,4 @@
-#include <ntddk.h>
+
 #include <dontuse.h>
 #include <intrin.h>
 #include<ntifs.h>
@@ -21,7 +21,6 @@ NTSTATUS CreateCloseHeatsink(PDEVICE_OBJECT DeviceObject, PIRP irp);
 void HeatsinkUnload(PDRIVER_OBJECT DriverObject);
 NTSTATUS RunHeatsinkLogic(PVOID Context);
 
-PHEATSINK_CONTEXT g_Context = NULL; //global context variable. will be used everywhere.
 ULONG g_NumCores = 0; //global context variable for #of cores in the User's CPU.
 typedef struct _HEATSINK_CONTEXT {
 	BOOLEAN StopFlag;
@@ -30,6 +29,7 @@ typedef struct _HEATSINK_CONTEXT {
 	
 } HEATSINK_CONTEXT, * PHEATSINK_CONTEXT;
 
+PHEATSINK_CONTEXT g_Context = NULL; //global context variable. will be used everywhere.
 /*
 driver entry function. I know, its ugly, theres a whole mem aloc function here. it sucks.
 */
@@ -50,16 +50,19 @@ extern "C" NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING reg
 		return status;
 	}
 	DriverObject->DeviceObject = DeviceObject;
-	PHEATSINK_CONTEXT context = (PHEATSINK_CONTEXT)ExAllocatePoolWithTag(NonPagedPoolNx, sizeof(HEATSINK_CONTEXT), 'STRT');//allocates mem for my context routine. STRT stands for STARTUP. this will be freed.
+	PHEATSINK_CONTEXT context = (PHEATSINK_CONTEXT)ExAllocatePool2(NonPagedPoolNx, sizeof(HEATSINK_CONTEXT), 'STRT');//allocates mem for my context routine. STRT stands for STARTUP. this will be freed.
 	//context will be passed as the PVOID Context of the WorkItem. thi sis necessary, as it contains every critical piece of information.
 	if (!context) {
 		KdPrint(("Not enough resources to allocate HEATSINK_CONTEXT.\n"));
+		IoDeleteDevice(DeviceObject);//necessary so the device is deleted. this isn't clean: unfortunately, it's the only way i can think of to successfully shut down.
 		return STATUS_INSUFFICIENT_RESOURCES;
 	}
 	PIO_WORKITEM workItem = IoAllocateWorkItem(DeviceObject);//allocates work item, so that we can call our function on repeat if the work item isn't null. if it is, we just simply not run the code.
 	if (!workItem) {
 		ExFreePoolWithTag(context, 'STRT');
 		KdPrint(("Failed to allocate work item.\n"));
+		IoDeleteDevice(DeviceObject);//necessary so the device is deleted. this isn't clean: unfortunately, it's the only way i can think of to successfully shut down.
+
 		return STATUS_INSUFFICIENT_RESOURCES;
 	}
 	context->StopFlag = FALSE;
@@ -81,7 +84,15 @@ extern "C" NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING reg
 		KdPrint(("Failed to resolve PsGetNextProcess or PsGetNextProcessThread\n"));
 		return STATUS_UNSUCCESSFUL;
 	}
-
+	//create a symlink so we can fetch information about p-ids and process threads without using depreciated apis.
+	UNICODE_STRING devName = RTL_CONSTANT_STRING(L"\\Device\\heatsink");
+	UNICODE_STRING symLink = RTL_CONSTANT_STRING(L"\\??\\heatsink_sys");
+	status = IoCreateSymbolicLink(&symLink, &devName);
+	if (!NT_SUCCESS(status)) {
+		KdPrint(("Failed to create symlink (0x%08X)\n", status));
+		IoDeleteDevice(DeviceObject);
+		return status;
+	}
 	return STATUS_SUCCESS;
 }
 ULONG ReadCoreTemperature(ULONG coreIndex) //will check for bit31 later; it determines if the reading is valid or not.
@@ -96,6 +107,7 @@ ULONG ReadCoreTemperature(ULONG coreIndex) //will check for bit31 later; it dete
 	    //After:  0000 0000 0000 0000 xxxx xxxx DDD DDDD
 	}
 	KeRevertToUserAffinityThreadEx(oldAffinity);
+
 	return(ULONG)-1;// if invalid reading, return ULONG-1. this'll be our "error check" in the loop. 
 	
 }
@@ -107,6 +119,7 @@ ULONG ReadCoreTemperature(ULONG coreIndex) //will check for bit31 later; it dete
 */
 void HeatsinkVoidRoutine(PDEVICE_OBJECT DeviceObject, PVOID Context)
 {
+	UNREFERENCED_PARAMETER(DeviceObject);
 	PHEATSINK_CONTEXT contextheatsink = (PHEATSINK_CONTEXT)Context;
 	//no need to set contextheatsink's flag to g_context's flag, because they're both pointers to the same val. if g_context changes the val of stopflag,
 	// then all pointers to said struct (which is allocated in the mempool) will recieve that "update"
@@ -138,7 +151,7 @@ NTSTATUS MigrateThreadsFromCore(ULONG HotCore)
 	ULONG coolestCore = 0;
 	ULONG maxDelta = 0;//we set this to 0 because it's an unsigned LONG. 0 = 000000000 (didnt count how many 0s there were, so dont cry about it). 
 	//this maxdelta is impossible to reach, as the moment a CPU core reaches that temp, the OS shuts down to ensure no damage is done to the CPU.
-	KAFFINITY oldAffinity;
+	
 	for (ULONG core = 0; core < g_NumCores; core++) {//finds coldest core. we will migrate "low" threads to this core.
 		ULONG delta = ReadCoreTemperature(core);
 		if (delta > maxDelta) {
@@ -149,7 +162,7 @@ NTSTATUS MigrateThreadsFromCore(ULONG HotCore)
 	if (maxDelta == 0) {
 		return STATUS_UNSUCCESSFUL;
 	}
-	KAFFINITY coolestAffinity = ((KAFFINITY)1 << coolestCore);
+	
 
 	ULONG migrations = 0;//sets current thread migrations. for our case, we won't go past 3; this limits the loop.
 	for (PEPROCESS proc = PsGetNextProcess(NULL); proc && migrations < MAX_THREAD_MIGRATIONS; proc = PsGetNextProcess(proc)) {
@@ -163,7 +176,7 @@ NTSTATUS MigrateThreadsFromCore(ULONG HotCore)
 			//while the (PEPROCESS) typecast may seem redundant, it's necessary; i'm using ntifs and ntddh; both are required. unfortunately, one handles PEPROCESS with _EPROCESS*
 			//and the other with _KPROCESS*; they're both the same, similar to PETHREAD being the same as PKTHREAD.
 			if (prio <= LOW_PRIORITY_THREASHOLD) {//if said thread's priority is lower than "LOW PRIORITY THRESHOLD", which is 10;
-				KeSetIdealProcessorThread(thread, coolestCore);
+				KeSetIdealProcessorThread((PKTHREAD)thread, (UCHAR)coolestCore);
 				migrations++;
 				KdPrint(("Migrated thread %p to core %d\n", thread, coolestCore));
 			}
@@ -178,6 +191,7 @@ NTSTATUS MigrateThreadsFromCore(ULONG HotCore)
 
 NTSTATUS CreateCloseHeatsink(PDEVICE_OBJECT DeviceObject, PIRP irp)
 {
+	UNREFERENCED_PARAMETER(DeviceObject);
 	irp->IoStatus.Status = STATUS_SUCCESS;
 	irp->IoStatus.Information = 0;
 	IoCompleteRequest(irp, IO_NO_INCREMENT);
@@ -208,24 +222,42 @@ void HeatsinkUnload(PDRIVER_OBJECT DriverObject)
 	}
 }
 /*
-This is where the magic happens. Currently, only supports intel cores. Read README for extra information when AMD support will come.
+This is where the magic happens. Currently, only supports intel cores.
 */
 NTSTATUS RunHeatsinkLogic(PVOID Context)
 {
 
 	PHEATSINK_CONTEXT heatsinkctx = (PHEATSINK_CONTEXT)Context;
+	BOOLEAN actiontaken = false;
+	NTSTATUS final_status = STATUS_SUCCESS;
 	for (ULONG core = 0; core < g_NumCores; core++) {//fetches all delta Temps of all cores, by pinning to each core, and reading the MSR of that core.
 		ULONG delta = ReadCoreTemperature(core); //reads core temperature, and returns it in "delta". delta is smaller the closer it is to MAX_TEMP TJMax.
-
+		
 		//check for critical temperature.
 		if (delta != (ULONG)-1 && delta <= 15) {
-			//migrate low priority thread(s), up to 3. 
+			//migrate low priority thread(s), up to 10. 
 			NTSTATUS status = MigrateThreadsFromCore(core);
-			if (!NT_SUCCESS(status)) {
-
+			if (NT_SUCCESS(status)) {
+				KdPrint(("Core %lu is hot (delta = %lu *C) - Migrated threads.\n", core, delta));
+				actiontaken = true;
+				final_status = STATUS_SUCCESS;
+				
 			}
-			return status;
+			else {
+				KdPrint(("ERROR: Unable to migrate threads from core %lu.\n", core));
+				final_status = status;
+			}
+			if (heatsinkctx->StopFlag == (BOOLEAN) true) {// had to add the "(BOOLEAN)" Because of "Unsafe mix of type BOOLEAN and bool in operation" error.
+				KdPrint(("STOP FLAG = TRUE. EXITING... \n"));
+				return final_status;
+			}
+			
+		}
+		else {
+			KdPrint(("Core %lu delta %lu *C- safe.\n", core, delta));
+			
 		}
 	}
+	return actiontaken ? final_status : STATUS_SUCCESS; //checks if there was any action taken. if yes, checks if final_status == status-success, which means that my driver did what it was supposed to do.
 		
 }

@@ -5,6 +5,10 @@
     {
       "AbsoluteMoniker": "D:0:0:{1EE54C53-1941-0EAF-FF12-4A8CF9D2D631}|heatsink\\heatsink.vcxproj|V:\\My_Stuff\\prog\\Micro-cuckDrivers\\heatsink\\heatsink\\heatsink\\Source.cpp||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}",
       "RelativeMoniker": "D:0:0:{1EE54C53-1941-0EAF-FF12-4A8CF9D2D631}|heatsink\\heatsink.vcxproj|solutionrelative:heatsink\\Source.cpp||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{1EE54C53-1941-0EAF-FF12-4A8CF9D2D631}|heatsink\\heatsink.vcxproj|V:\\My_Stuff\\prog\\Micro-cuckDrivers\\heatsink\\heatsink\\heatsink\\heatsink.inf||{3B902123-F8A7-4915-9F01-361F908088D0}",
+      "RelativeMoniker": "D:0:0:{1EE54C53-1941-0EAF-FF12-4A8CF9D2D631}|heatsink\\heatsink.vcxproj|solutionrelative:heatsink\\heatsink.inf||{3B902123-F8A7-4915-9F01-361F908088D0}"
     }
   ],
   "DocumentGroupContainers": [
@@ -14,11 +18,24 @@
       "DocumentGroups": [
         {
           "DockedWidth": 200,
-          "SelectedChildIndex": 1,
+          "SelectedChildIndex": 2,
           "Children": [
             {
               "$type": "Bookmark",
               "Name": "ST:0:0:{aa2115a1-9712-457b-9047-dbb71ca2cdd2}"
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 1,
+              "Title": "heatsink.inf",
+              "DocumentMoniker": "V:\\My_Stuff\\prog\\Micro-cuckDrivers\\heatsink\\heatsink\\heatsink\\heatsink.inf",
+              "RelativeDocumentMoniker": "heatsink\\heatsink.inf",
+              "ToolTip": "V:\\My_Stuff\\prog\\Micro-cuckDrivers\\heatsink\\heatsink\\heatsink\\heatsink.inf",
+              "RelativeToolTip": "heatsink\\heatsink.inf",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAACQAAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.002933|",
+              "WhenOpened": "2025-07-31T01:44:40.856Z",
+              "EditorCaption": ""
             },
             {
               "$type": "Document",
@@ -28,7 +45,7 @@
               "RelativeDocumentMoniker": "heatsink\\Source.cpp",
               "ToolTip": "V:\\My_Stuff\\prog\\Micro-cuckDrivers\\heatsink\\heatsink\\heatsink\\Source.cpp",
               "RelativeToolTip": "heatsink\\Source.cpp",
-              "ViewState": "AgIAAAAAAAAAAAAAAAAAAKIAAAAlAAAAAAAAAA==",
+              "ViewState": "AgIAAOIAAAAAAAAAAAAswPcAAAAaAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000677|",
               "WhenOpened": "2025-07-03T15:16:25.373Z",
               "EditorCaption": ""

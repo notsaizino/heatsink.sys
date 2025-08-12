@@ -1,0 +1,37 @@
+; heatsink.inf - INF for primitive (software-only) kernel driver
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = System
+ClassGuid   = {4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider    = %ManufacturerName%
+DriverVer = 08/11/2025,20.26.31.759
+CatalogFile = heatsink.cat
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+heatsink.sys = 1
+
+[DefaultInstall.NTamd64]
+CopyFiles = @heatsink.sys
+
+[DefaultInstall.NTamd64.Services]
+AddService = heatsink,,heatsink_Service_Install
+
+[heatsink_Service_Install]
+DisplayName    = "Heatsink Kernel Driver"
+ServiceType    = 1          ; SERVICE_KERNEL_DRIVER
+StartType      = 3          ; SERVICE_DEMAND_START (manual)
+ErrorControl   = 1          ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %13%\heatsink.sys
+
+[Strings]
+ManufacturerName = "Your Manufacturer Name"
+DiskName = "Heatsink Driver Installation Disk"
+
