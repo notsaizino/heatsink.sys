@@ -5,17 +5,12 @@
 #define MAX_THREAD_MIGRATIONS 10 //maximum of 10 thread migrations per call of RunHeatsinkLogic.
 #define LOW_PRIORITY_THREASHOLD 10 //0-31 scale, 0 lowest. 31 = realtime.
 
-typedef PEPROCESS(*t_PsGetNextProcess)(PEPROCESS Process);
-typedef PETHREAD(*t_PsGetNextProcessThread)(PEPROCESS Process, PETHREAD Thread);
 
-t_PsGetNextProcess PsGetNextProcess = NULL;
-t_PsGetNextProcessThread PsGetNextProcessThread = NULL;
+//TODO: Dynamic lookup via public symbols for PsGetNextProcess & PsGetNextProcessThread. should be more stable than pattern scanning.
 
 
 ULONG ReadCoreTemperature(ULONG coreIndex);
 void HeatsinkVoidRoutine(PDEVICE_OBJECT DeviceObject, PVOID Context);
-
-
 NTSTATUS MigrateThreadsFromCore(ULONG Core);
 NTSTATUS CreateCloseHeatsink(PDEVICE_OBJECT DeviceObject, PIRP irp);
 void HeatsinkUnload(PDRIVER_OBJECT DriverObject);
@@ -29,9 +24,9 @@ typedef struct _HEATSINK_CONTEXT {
 	
 } HEATSINK_CONTEXT, * PHEATSINK_CONTEXT;
 
-PHEATSINK_CONTEXT g_Context = NULL; //global context variable. will be used everywhere.
+
 /*
-driver entry function. I know, its ugly, theres a whole mem aloc function here. it sucks.
+driver entry function. I know, its ugly, theres a whole mem aloc function here. it works, though.
 */
 extern "C" NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING registrypath) {
 	UNREFERENCED_PARAMETER(registrypath);
@@ -41,25 +36,19 @@ extern "C" NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING reg
 	//through windbg or if another process does so by accident. its an edge case (the second example), but it's required for safety.
 	DriverObject->MajorFunction[IRP_MJ_CLOSE] = CreateCloseHeatsink;
 	DriverObject->DriverUnload = HeatsinkUnload;
-	NTSTATUS status = IoCreateDevice(DriverObject, 0, NULL, NULL, 0, TRUE, &DeviceObject);
-	//this IoCreateDevice function really came in clutch. I made it TRUE to the exclusive part, so that I can declare that only 1 DeviceObject is allowed to run at a time.
-	//this is better, and a LOT less overhead than using mutex. :)
+	NTSTATUS status = IoCreateDevice(DriverObject, sizeof(HEATSINK_CONTEXT), NULL, NULL, 0, TRUE, &DeviceObject); //allocates Device object so that i can store context
+	//in device object. this is an extremely efficient way to pass around the context struct without using global variables!!
 
 	if (!NT_SUCCESS(status)) {//checks if the deviceobject was properly created.
 		KdPrint(("Failed to create device Object (0x%08X)\n", status));
 		return status;
 	}
 	DriverObject->DeviceObject = DeviceObject;
-	PHEATSINK_CONTEXT context = (PHEATSINK_CONTEXT)ExAllocatePool2(NonPagedPoolNx, sizeof(HEATSINK_CONTEXT), 'STRT');//allocates mem for my context routine. STRT stands for STARTUP. this will be freed.
+	PHEATSINK_CONTEXT context = (PHEATSINK_CONTEXT)DeviceObject->DeviceExtension;//allocates mem for my context routine. STRT stands for STARTUP. this will be freed.
 	//context will be passed as the PVOID Context of the WorkItem. thi sis necessary, as it contains every critical piece of information.
-	if (!context) {
-		KdPrint(("Not enough resources to allocate HEATSINK_CONTEXT.\n"));
-		IoDeleteDevice(DeviceObject);//necessary so the device is deleted. this isn't clean: unfortunately, it's the only way i can think of to successfully shut down.
-		return STATUS_INSUFFICIENT_RESOURCES;
-	}
+	context->StopFlag = FALSE;
 	PIO_WORKITEM workItem = IoAllocateWorkItem(DeviceObject);//allocates work item, so that we can call our function on repeat if the work item isn't null. if it is, we just simply not run the code.
 	if (!workItem) {
-		ExFreePoolWithTag(context, 'STRT');
 		KdPrint(("Failed to allocate work item.\n"));
 		IoDeleteDevice(DeviceObject);//necessary so the device is deleted. this isn't clean: unfortunately, it's the only way i can think of to successfully shut down.
 
@@ -71,30 +60,13 @@ extern "C" NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING reg
 	g_NumCores = KeQueryActiveProcessorCountEx(ALL_PROCESSOR_GROUPS);// sets the # of cores in the CPU.
 	
 	KeInitializeEvent(&context->UnloadEvent, NotificationEvent, FALSE);
-	g_Context = context;//sets context to global variable, so i can always access it. i know, it's dirty. but whatever.
-	
-	IoQueueWorkItem(workItem, HeatsinkVoidRoutine, DelayedWorkQueue, (PVOID)context);
-	UNICODE_STRING name;
-	RtlInitUnicodeString(&name, L"PsGetNextProcess");
-	PsGetNextProcess = (t_PsGetNextProcess)MmGetSystemRoutineAddress(&name);
-	RtlInitUnicodeString(&name, L"PsGetNextProcessThread");
-	PsGetNextProcessThread = (t_PsGetNextProcessThread)MmGetSystemRoutineAddress(&name);
 
-	if (!PsGetNextProcess || !PsGetNextProcessThread) {
-		KdPrint(("Failed to resolve PsGetNextProcess or PsGetNextProcessThread\n"));
-		return STATUS_UNSUCCESSFUL;
-	}
-	//create a symlink so we can fetch information about p-ids and process threads without using depreciated apis.
-	UNICODE_STRING devName = RTL_CONSTANT_STRING(L"\\Device\\heatsink");
-	UNICODE_STRING symLink = RTL_CONSTANT_STRING(L"\\??\\heatsink_sys");
-	status = IoCreateSymbolicLink(&symLink, &devName);
-	if (!NT_SUCCESS(status)) {
-		KdPrint(("Failed to create symlink (0x%08X)\n", status));
-		IoDeleteDevice(DeviceObject);
-		return status;
-	}
+	IoQueueWorkItem(workItem, HeatsinkVoidRoutine, DelayedWorkQueue, (PVOID)context);
+	
 	return STATUS_SUCCESS;
 }
+
+
 ULONG ReadCoreTemperature(ULONG coreIndex) //will check for bit31 later; it determines if the reading is valid or not.
 {
 	KAFFINITY oldAffinity = KeSetSystemAffinityThreadEx((KAFFINITY)1 << coreIndex); // (KAFFINITY)1 << core creates a bitmask with only the 'core'-th bit set, selecting that CPU core.
@@ -125,12 +97,12 @@ void HeatsinkVoidRoutine(PDEVICE_OBJECT DeviceObject, PVOID Context)
 	// then all pointers to said struct (which is allocated in the mempool) will recieve that "update"
 	LARGE_INTEGER delay;//sets the delay of execution before requeuing another workitem.
 	delay.QuadPart = -10 * 1000 * 1000; //1 second.
-
+	
 	if (contextheatsink->StopFlag == TRUE) {
 		KeSetEvent(&contextheatsink->UnloadEvent, IO_NO_INCREMENT, FALSE);//sets event. waits for the work item to finish.
 		IoFreeWorkItem(contextheatsink->workItem);//frees the work item.
 
-		ExFreePoolWithTag(contextheatsink, 'STRT');//frees the allocated mempool.
+		
 
 		return;
 	}
@@ -139,14 +111,15 @@ void HeatsinkVoidRoutine(PDEVICE_OBJECT DeviceObject, PVOID Context)
 		KeDelayExecutionThread(KernelMode, FALSE, &delay);
 	}
 	//if the thread allocation did OR did not work, we requeue the work item.
-	IoQueueWorkItem(contextheatsink->workItem, HeatsinkVoidRoutine, DelayedWorkQueue, Context);
+	IoQueueWorkItem(contextheatsink->workItem, HeatsinkVoidRoutine, DelayedWorkQueue, Context);//this may cause recursion bug and crash the OS.
 }
 /*
 helper function to read MSR (Model Specific Register. contains direct sensor information, like temp, cycle, etc.). Returns delta temperature from TjMax (maximum temp).
 */
 
 NTSTATUS MigrateThreadsFromCore(ULONG HotCore)
-{
+{	
+	NTSTATUS status;
 	//Step1: Find coolest core. 
 	ULONG coolestCore = 0;
 	ULONG maxDelta = 0;//we set this to 0 because it's an unsigned LONG. 0 = 000000000 (didnt count how many 0s there were, so dont cry about it). 
@@ -162,14 +135,20 @@ NTSTATUS MigrateThreadsFromCore(ULONG HotCore)
 	if (maxDelta == 0) {
 		return STATUS_UNSUCCESSFUL;
 	}
-	
+	PETHREAD thread = NULL;
 
 	ULONG migrations = 0;//sets current thread migrations. for our case, we won't go past 3; this limits the loop.
 	for (PEPROCESS proc = PsGetNextProcess(NULL); proc && migrations < MAX_THREAD_MIGRATIONS; proc = PsGetNextProcess(proc)) {
-		for (PETHREAD thread = PsGetNextProcessThread(proc, NULL); thread && migrations < MAX_THREAD_MIGRATIONS; thread = PsGetNextProcessThread(proc, thread)) {
-			//ObReferenceObject(thread);This is unecessary. The API takes ETHREAD* directly, and it won't race-free that object for me. 
+		for (thread = PsGetNextProcessThread(proc, NULL); thread && migrations < MAX_THREAD_MIGRATIONS; thread = PsGetNextProcessThread(proc, thread)) {
+			status = ObReferenceObject(thread);//This is unecessary. The API takes ETHREAD* directly, and it won't race-free that object for me. 
 			// if someone exits the process mid-migration, i'd be dereferencing a freed object.
-			//it's better to skip reference counting entirely and accept that tiny risk, on a driver that's already risky in nature. 
+			//it's better to skip reference counting entirely and accept that tiny risk, on a driver that's already risky in nature.
+			// Ill still use it tho JUUUUUST IN CASE
+			if (!NT_SUCCESS(status)) {//added security
+				//thread is exiting, due to race-free. so just skip it.
+				KdPrint(("Failed to reference thread %p (Status: 0x%X), skipping.\n", thread, status));
+				continue;
+			}
 			KPRIORITY prio = KeQueryPriorityThread((PKTHREAD)thread);//fetches the prio of the thread we're on.
 			if (KeGetCurrentProcessorNumberEx(NULL) != HotCore) continue; //if the thread isnt on 
 			if (proc == (PEPROCESS)PsInitialSystemProcess) continue;//if it's a system critical thread, skip. 
@@ -183,7 +162,9 @@ NTSTATUS MigrateThreadsFromCore(ULONG HotCore)
 			//ObDereferenceObject(thread); Unecessary. check comment for ObReferenceObject.
 
 		}
+		ObDereferenceObject(thread);
 	}
+	
 	return migrations ? STATUS_SUCCESS : STATUS_NOT_FOUND; //returns status success if migrations = 10; otherwise, status not found.
 	
 	
@@ -202,24 +183,18 @@ Unloads the driver. Waits until the current workitem (if there is one) is comple
 */
 void HeatsinkUnload(PDRIVER_OBJECT DriverObject)
 {
-	if (g_Context) {
-		// Request work item shutdown
-		if (g_Context->workItem) {
-			g_Context->StopFlag = TRUE;
-			KeWaitForSingleObject(&g_Context->UnloadEvent, Executive, KernelMode, FALSE, NULL);
-		}
+	PDEVICE_OBJECT DeviceObject = DriverObject->DeviceObject;
+	if (DeviceObject == NULL) {
+		return; 
 		
-		
-		// Free context structure
-		ExFreePoolWithTag(g_Context, 'STRT');
-		g_Context = NULL;
 	}
-
+	// Request work item shutdown
+	PHEATSINK_CONTEXT context = (PHEATSINK_CONTEXT)DeviceObject->DeviceExtension; //convert DeviceExtension back to PHEATSINK_CONTEXT
+	context->StopFlag = TRUE;
+	KeWaitForSingleObject(&context->UnloadEvent, Executive, KernelMode, FALSE, NULL);
 	//Deletes the deviceObject. 
 	PDEVICE_OBJECT deviceObject = DriverObject->DeviceObject;
-	if (deviceObject) {
-		IoDeleteDevice(deviceObject);
-	}
+	IoDeleteDevice(DeviceObject);
 }
 /*
 This is where the magic happens. Currently, only supports intel cores.
